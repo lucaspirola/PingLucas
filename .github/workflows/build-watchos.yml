@@ -17,6 +17,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+defaults:
+  run:
+    # The app lives under apps/PingLucas so the Python relay stays the root of
+    # the repository -- it is the part that actually runs on the machine.
+    working-directory: apps/PingLucas
+
 env:
   # macos-26 image ships Xcode 26.0.1 / 26.1.1 / 26.2 / 26.3 / 26.4.1 / 26.5 / 26.6
   # 26.6 is the image default; pin it so an image refresh cannot silently move you.
@@ -42,7 +48,7 @@ jobs:
       # Only needed if you keep project.yml in git and do NOT commit the .xcodeproj.
       # Recommended for a no-Mac workflow: the .xcodeproj is generated, never merged.
       - name: Generate Xcode project (XcodeGen)
-        if: hashFiles('project.yml') != ''
+        if: hashFiles('apps/PingLucas/project.yml') != ''
         run: |
           brew install xcodegen
           xcodegen generate

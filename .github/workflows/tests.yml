@@ -1,0 +1,43 @@
+name: tests
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    # The peer protocol relies on AF_UNIX and SO_PEERCRED, so this suite is
+    # Linux-only by design rather than by omission.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install pytest
+        run: python -m pip install --upgrade pip pytest
+      - name: Run the suite
+        run: python -m pytest tests/ -q
+      - name: Check the relay starts, registers and withdraws
+        run: |
+          set -euo pipefail
+          export XDG_RUNTIME_DIR="${RUNNER_TEMP}/run"
+          export XDG_CONFIG_HOME="${RUNNER_TEMP}/config"
+          export XDG_STATE_HOME="${RUNNER_TEMP}/state"
+          mkdir -p "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME" "$XDG_STATE_HOME"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          mkdir -p "$HOME/.claude/sessions" && chmod 700 "$HOME/.claude/sessions"
+          ./bin/pinglucas init --name ci --transport console
+          ./bin/pinglucas start
+          ./bin/pinglucas status
+          test -f "$HOME/.claude/sessions/$(python -c "import json;print(json.load(open('$XDG_STATE_HOME/ping-lucas/relay.pid'))['pid'])").json"
+          ./bin/pinglucas stop
+          # The record must be gone once the relay withdraws, or a dead peer
+          # would linger on every roster on the machine.
+          test -z "$(ls "$HOME/.claude/sessions"/*.json 2>/dev/null || true)"

@@ -1,9 +1,14 @@
 """ntfy.sh transport -- zero-signup push, with a second topic for replies.
 
 ntfy needs no account: publish to a topic, subscribe to it on the phone, and
-the notification mirrors to the watch. It is the fallback when Lucas does not
-want a bot token, at the cost of a clumsier reply: he publishes to a separate
-reply topic from the ntfy app rather than replying in place.
+the notification mirrors to the watch. That makes it the fastest transport to
+get running, and the right first choice.
+
+Its limit is the reply direction, and it is a hard one: ntfy has no watchOS app
+and its iOS build declares no text-input notification action, so an answer
+cannot be composed from the wrist at all. Lucas has to reach for his phone and
+publish to a separate reply topic. Use :mod:`~ping_lucas.transports.telegram`
+if answering without breaking stride matters.
 
 Pick unguessable topic names. A topic is a public channel to anyone who knows
 its name; ``pinglucas init`` generates random ones for exactly that reason.

@@ -104,17 +104,18 @@ session that asked, three seconds later:
 ```bash
 git clone https://github.com/lucaspirola/PingLucas.git
 cd PingLucas
-./bin/pinglucas init --transport ntfy
+./bin/pinglucas init --transport ntfy   # zero setup, works immediately
 ./bin/pinglucas start
+./bin/pinglucas qr                      # scan with your phone
 ```
 
-That is the whole setup for the send direction. `init` prints two random topic
-names; subscribe your phone to the first one in the [ntfy iOS
-app](https://apps.apple.com/app/ntfy/id1625396347) and pings start arriving on
-your watch immediately. Replies go to the second topic.
+`init` generates two random ntfy topics; scan the first with the [ntfy iOS
+app](https://apps.apple.com/app/ntfy/id1625396347) and pings reach your watch
+immediately.
 
-For replies you can compose *without* leaving the notification, use Telegram
-instead — see [Choosing a transport](#choosing-a-transport).
+That gets you running in thirty seconds, but ntfy has no watchOS app, so
+answering means picking up your phone. **For replies from the wrist, use
+Telegram** — see [Choosing a transport](#choosing-a-transport).
 
 Install the Claude Code plugin so every session knows you exist:
 
@@ -138,46 +139,43 @@ loginctl enable-linger "$USER"
 
 ## Choosing a transport
 
-Both options are free and neither needs an inbound port, a public hostname, or
-a paid Apple Developer account.
+Both options are free, and neither needs an inbound port, a public hostname, or
+an Apple Developer account.
 
 | | **Telegram** | **ntfy** |
 | --- | --- | --- |
 | Setup | A bot token from [@BotFather](https://t.me/botfather) | Nothing. Pick a topic. |
-| Notification on the watch | Yes | Yes |
-| Reply **from the notification** | Yes — dictate or scribble, without opening anything | No |
-| Reply at all | Yes | Yes, by publishing to the reply topic from the ntfy app |
+| Native Apple Watch app | **Yes** — shipped 9 June 2026, requires watchOS 26+ | No, and the maintainer has marked one [out of scope](https://github.com/binwiederhier/ntfy/issues/1680) |
+| Reply from the notification | **Yes** — dictation, Scribble, or the Series 11 keyboard | No — its iOS build declares no text-input action at all |
+| Reply at all | From the wrist | Only by taking out your phone and publishing to the reply topic |
 | Knows which question you answered | Yes, when you reply to that specific message | Only via the `z2td` tag |
 | Privacy | Between you and your own bot | A topic name is a password; keep it secret |
 
-**Telegram is the better wrist experience** and the reason is narrow but
-decisive: its notifications expose a reply action on watchOS, so answering is
-one gesture from the raised wrist. ntfy is the better *first* experience,
-because it takes zero setup.
+**Use Telegram.** As of June 2026 it has a native watchOS app *and* — the part
+that actually matters — it declares a `UNTextInputNotificationAction`, so you
+can answer straight from the raised wrist without opening anything. ntfy
+cannot: it has no watch app and no reply action, so every answer costs you a
+phone.
+
+ntfy is still the better *first* transport, because it works in thirty seconds
+with no account. Start there, move to Telegram once you are convinced.
 
 ```bash
-./bin/pinglucas init --transport telegram --telegram-token 123456:AA...
-# then message your bot once, so it can learn the chat id:
-./bin/pinglucas doctor --learn-chat --ping
+pinglucas init --transport telegram --telegram-token 123456:AA...
 ```
 
-You can also run several at once — `"transports": ["telegram", "ntfy"]` sends
-to both and takes replies from the first bidirectional one.
+Then **message the bot once from your phone** — a Telegram bot cannot open a
+conversation, so until you say something to it the relay has no chat to send
+to. After that:
 
-## Addressing a reply
+```bash
+pinglucas doctor --learn-chat --ping
+```
 
-In order of confidence, a reply is routed by:
+which discovers and saves the chat id and sends a test notification.
 
-1. **An explicit tag.** `z2td ship it`, `[z2td] ship it` and `#z2td: ship it`
-   all work. Tags avoid characters that are ambiguous on a small screen or in
-   dictation — no `0`/`O`, no `1`/`l`/`I`.
-2. **The transport's own linkage.** On Telegram, replying to a specific message
-   routes to that message's question, no tag needed.
-3. **The most recent unanswered question.** Which is almost always what you
-   meant, because you are answering the thing that just buzzed.
-
-Text that merely *starts* with four letters is not mistaken for a tag: if the
-tag is unknown, the whole line is treated as prose and delivered intact.
+You can run several at once — `"transports": ["telegram", "ntfy"]` sends to
+both and takes replies from the first bidirectional one.
 
 ## Who can reach you
 
