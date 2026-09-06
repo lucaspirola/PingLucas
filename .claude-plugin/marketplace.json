@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "ping-lucas",
+  "description": "Publish a human as a Claude Code peer session so any agent can reach them on their watch.",
+  "owner": { "name": "Lucas Pirola" },
+  "plugins": [
+    {
+      "name": "ping-lucas",
+      "source": "./plugins/ping-lucas",
+      "description": "Makes you a peer session. Agents call SendMessage; it rings your Apple Watch; your reply goes straight back to the agent that asked.",
+      "author": { "name": "Lucas Pirola" },
+      "category": "Developer Tools",
+      "keywords": ["claude-code", "notifications", "human-in-the-loop", "apple-watch", "peer-protocol"]
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# PingLucas launcher. Works from a clone, a plugin cache, or a symlink on PATH.
+set -euo pipefail
+here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+export PYTHONPATH="${here}/../plugins/ping-lucas/src${PYTHONPATH:+:${PYTHONPATH}}"
+exec python3 -m ping_lucas "$@"

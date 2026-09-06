@@ -1,0 +1,147 @@
+name: Build watchOS + iOS (unsigned)
+
+# Free on PUBLIC repos: "Use of the standard GitHub-hosted runners is free and
+# unlimited on public repositories."
+#   https://docs.github.com/en/actions/reference/runners/github-hosted-runners
+# macos-26 (arm64, M1, 3 vCPU / 7 GB) is a STANDARD runner -> free here.
+# NEVER use macos-*-large / -xlarge: larger runners are always billed, even on
+# public repos.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # macos-26 image ships Xcode 26.0.1 / 26.1.1 / 26.2 / 26.3 / 26.4.1 / 26.5 / 26.6
+  # 26.6 is the image default; pin it so an image refresh cannot silently move you.
+  XCODE_VERSION: "26.6"
+  PROJECT: PingLucas.xcodeproj
+  IOS_SCHEME: PingLucas
+  WATCH_SCHEME: PingLucas Watch App
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Select Xcode ${{ env.XCODE_VERSION }}
+        run: |
+          sudo xcode-select -s "/Applications/Xcode_${XCODE_VERSION}.app/Contents/Developer"
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i watch || true
+
+      # Only needed if you keep project.yml in git and do NOT commit the .xcodeproj.
+      # Recommended for a no-Mac workflow: the .xcodeproj is generated, never merged.
+      - name: Generate Xcode project (XcodeGen)
+        if: hashFiles('project.yml') != ''
+        run: |
+          brew install xcodegen
+          xcodegen generate
+          # Xcode 26 moved the watch app from Watch/ to PlugIns/. XcodeGen still
+          # emits dstSubfolderSpec = 16 (Watch). Patch it to 13 (PlugIns) or the
+          # embed step fails with "is a Foundation extension and must be embedded
+          # in the parent app bundle's PlugIns directory".
+          # https://github.com/yonaskolb/XcodeGen/issues/1613
+          if grep -q 'dstSubfolderSpec = 16' "${PROJECT}/project.pbxproj"; then
+            sed -i 's/dstSubfolderSpec = 16;/dstSubfolderSpec = 13;/g' "${PROJECT}/project.pbxproj"
+            sed -i 's|dstPath = "\$(CONTENTS_FOLDER_PATH)/Watch";|dstPath = "";|g' "${PROJECT}/project.pbxproj"
+          fi
+
+      # The macos-26 image preinstalls watchOS 26.2 / 26.4 / 26.5 runtimes
+      # (Apple Watch SE 3, Series 11 42/46mm, Ultra 3). Only download if absent,
+      # otherwise this is a multi-GB, multi-minute tax. When present it is a ~2s no-op.
+      - name: Ensure a watchOS runtime exists
+        run: |
+          xcrun simctl list runtimes | grep -i watchos || \
+            xcodebuild -downloadPlatform watchOS
+
+      # 1) Fast gate: build the watch app on its own. Do NOT rely on the iOS
+      #    scheme to build the embedded watch app -- with Xcode 14+ it can be
+      #    silently omitted from the archive.
+      - name: Build watch app (unsigned, simulator slice)
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project "${PROJECT}" \
+            -scheme "${WATCH_SCHEME}" \
+            -configuration Debug \
+            -destination 'generic/platform=watchOS Simulator' \
+            -derivedDataPath "${RUNNER_TEMP}/dd-watch-sim" \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Build watch app (unsigned, device slice / arm64_32+arm64)
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project "${PROJECT}" \
+            -scheme "${WATCH_SCHEME}" \
+            -configuration Release \
+            -destination 'generic/platform=watchOS' \
+            -derivedDataPath "${RUNNER_TEMP}/dd-watch-dev" \
+            CODE_SIGNING_ALLOWED=NO
+
+      # 2) Real deliverable: archive the iOS app, which embeds the watch app.
+      #    CODE_SIGNING_ALLOWED=NO is what makes this work with zero Apple account.
+      #    (It is also measurably faster -- codesign is not free.)
+      - name: Archive iOS app with embedded watch app (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild archive \
+            -project "${PROJECT}" \
+            -scheme "${IOS_SCHEME}" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "${RUNNER_TEMP}/PingLucas.xcarchive" \
+            -derivedDataPath "${RUNNER_TEMP}/dd-ios" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            ENABLE_BITCODE=NO
+
+      # 3) Prove the watch app actually made it into the bundle. Xcode 26 puts it
+      #    in PlugIns/; older layouts used Watch/. Fail loudly if it is missing --
+      #    a silently watch-less .ipa is the classic CI trap.
+      - name: Verify embedded watch app
+        run: |
+          APP="${RUNNER_TEMP}/PingLucas.xcarchive/Products/Applications/${IOS_SCHEME}.app"
+          ls -la "$APP"
+          if [ -d "$APP/PlugIns" ]; then find "$APP/PlugIns" -maxdepth 1 -name '*.app'; fi
+          if [ -d "$APP/Watch" ];   then find "$APP/Watch"   -maxdepth 1 -name '*.app'; fi
+          FOUND=$( { find "$APP/PlugIns" "$APP/Watch" -maxdepth 1 -name '*.app' 2>/dev/null || true; } | wc -l | tr -d ' ')
+          if [ "$FOUND" = "0" ]; then
+            echo "::error::No embedded watchOS app found in $APP (checked PlugIns/ and Watch/)"
+            exit 1
+          fi
+
+      # 4) Package as an UNSIGNED .ipa. This is just a zip with a Payload/ dir.
+      #    xcodebuild -exportArchive is NOT usable without a signing identity.
+      - name: Package unsigned .ipa
+        run: |
+          set -e
+          STAGE="${RUNNER_TEMP}/ipa"
+          rm -rf "$STAGE" && mkdir -p "$STAGE/Payload"
+          cp -R "${RUNNER_TEMP}/PingLucas.xcarchive/Products/Applications/${IOS_SCHEME}.app" "$STAGE/Payload/"
+          ( cd "$STAGE" && zip -qry "${RUNNER_TEMP}/PingLucas-unsigned.ipa" Payload )
+          ls -lh "${RUNNER_TEMP}/PingLucas-unsigned.ipa"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PingLucas-unsigned-ipa
+          path: ${{ runner.temp }}/PingLucas-unsigned.ipa
+          retention-days: 30
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PingLucas-xcarchive
+          path: ${{ runner.temp }}/PingLucas.xcarchive
+          retention-days: 7

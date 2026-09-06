@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/src/ping_lucas/hook.py\" start",
+            "timeout": 5,
+            "statusMessage": "Checking whether Lucas is reachable"
+          }
+        ]
+      }
+    ]
+  }
+}

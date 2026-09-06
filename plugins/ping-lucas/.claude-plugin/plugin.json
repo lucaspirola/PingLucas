@@ -1,0 +1,18 @@
+{
+  "name": "ping-lucas",
+  "version": "0.1.0",
+  "description": "Publishes you as a Claude Code peer session. Any agent can SendMessage you; it arrives on your Apple Watch; your reply returns to the agent that asked.",
+  "author": { "name": "Lucas Pirola" },
+  "license": "MIT",
+  "repository": "https://github.com/lucaspirola/PingLucas",
+  "homepage": "https://github.com/lucaspirola/PingLucas",
+  "keywords": [
+    "claude-code",
+    "human-in-the-loop",
+    "notifications",
+    "apple-watch",
+    "peer-protocol",
+    "telegram",
+    "ntfy"
+  ]
+}
