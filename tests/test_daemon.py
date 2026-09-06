@@ -222,16 +222,22 @@ def test_outbound_hop_chain_appends_our_own_token(relay):
     assert relay.router.outbound_hop_chain(inherited) == f"{inherited},{token}"
 
 
-def test_outbound_hop_chain_caps_at_thirty_two_entries(relay):
+def test_outbound_hop_chain_never_exceeds_what_the_inbox_accepts(relay):
+    """A relay must not emit a chain it would itself reject as hop-runaway."""
+    from ping_lucas.envelope import valid_hop_chain
+    from ping_lucas.inbox import MAX_HOPS
+
     token = relay.inbox.hop_token
     inherited = ",".join(f"{index:024x}" for index in range(40))
 
     result = relay.router.outbound_hop_chain(inherited)
     hops = result.split(",")
-    assert len(hops) == 32
+    assert len(hops) == MAX_HOPS
     assert hops[-1] == token
-    # The 31 kept ancestors are the most recent ones.
-    assert hops[:-1] == [f"{index:024x}" for index in range(9, 40)]
+    # The kept ancestors are the most recent ones.
+    assert hops[:-1] == [f"{index:024x}" for index in range(40 - MAX_HOPS + 1, 40)]
+    # And the result is still a chain Claude's own parser will accept.
+    assert valid_hop_chain(result)
 
 
 def test_a_router_without_a_hop_token_leaves_the_chain_alone(relay):

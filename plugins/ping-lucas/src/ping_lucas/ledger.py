@@ -138,7 +138,6 @@ class Ledger:
 
     def record(self, peer: PeerSession, message_id: str, body: str, *, hop_chain: str = "", priority: str = "now") -> Entry:
         with self._lock:
-            self._evict()
             entry = Entry(
                 tag=self._new_tag(),
                 message_id=message_id,
@@ -155,6 +154,9 @@ class Ledger:
                 priority=priority,
             )
             self._entries[entry.tag] = entry
+            # Evict *after* inserting: evicting first leaves the ledger one
+            # over its cap until the next read happens to trim it.
+            self._evict()
             self._save()
             return entry
 

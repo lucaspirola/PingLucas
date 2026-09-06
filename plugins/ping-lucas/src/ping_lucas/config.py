@@ -103,9 +103,12 @@ class Config:
             if env.get(key):
                 self.settings.setdefault(transport, {})[field_name] = env[key]
         if env.get("PING_LUCAS_CLAUDE_CONFIG_DIRS"):
-            self.extra_claude_roots.extend(
-                piece for piece in env["PING_LUCAS_CLAUDE_CONFIG_DIRS"].split(os.pathsep) if piece
-            )
+            # Skip roots we already hold: `init` and `doctor` both load and then
+            # save, so appending unconditionally would grow the stored list by
+            # one copy of every environment root on each invocation.
+            for piece in env["PING_LUCAS_CLAUDE_CONFIG_DIRS"].split(os.pathsep):
+                if piece and piece not in self.extra_claude_roots:
+                    self.extra_claude_roots.append(piece)
 
     def validate(self) -> None:
         if not self.name or len(self.name) > 48 or any(ch in self.name for ch in ' \t"<>/\\'):

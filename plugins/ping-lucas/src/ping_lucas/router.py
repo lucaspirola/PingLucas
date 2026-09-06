@@ -15,9 +15,8 @@ from typing import Any, Callable
 from .ledger import Entry, Ledger, split_tag
 from .outbox import Outbox
 from .registry import PeerDirectory
+from .inbox import MAX_HOPS
 from .transports import IncomingReply
-
-MAX_HOP_CHAIN = 32
 
 
 @dataclass(frozen=True)
@@ -104,8 +103,12 @@ class ReplyRouter:
         -- from a present one carried along a peer route. A reply to an agent's
         question is the latter, so the chain grows, which is what lets both
         ends detect a loop.
+
+        The cap is the inbox's own inbound limit, not the wire maximum: a relay
+        that emitted a longer chain than it accepts would refuse its own
+        traffic if two relays ever sat on the same route.
         """
         if not self.hop_token:
             return inherited
         hops = inherited.split(",") if inherited else []
-        return ",".join((*hops, self.hop_token)[-MAX_HOP_CHAIN:])
+        return ",".join((*hops, self.hop_token)[-MAX_HOPS:])
