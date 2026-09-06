@@ -198,11 +198,25 @@ def registry_dirs(extra: Iterable[str] = ()) -> list[Path]:
 
 
 class PeerDirectory:
-    """Read-only view of the live Claude sessions on this machine."""
+    """Read-only view of the live Claude sessions on this machine.
+
+    A full scan reads every record in every registry root, and a busy machine
+    accumulates hundreds of them.  Since the inbox resolves a sender on every
+    inbound frame, an uncached scan would mean thousands of file reads a
+    minute; the cache is short enough that a session appearing or ending is
+    still noticed promptly, and every path that actually *sends* re-validates
+    its target against disk anyway.
+    """
+
+    #: Seconds a listing may be reused. Deliberately shorter than Claude's own
+    #: roster refresh, so we never look staler than the tool the user sees.
+    CACHE_TTL_S = 1.0
 
     def __init__(self, extra_roots: Iterable[str] = (), self_pid: int | None = None):
         self._extra_roots = list(extra_roots)
         self._self_pid = self_pid
+        self._cache: list[PeerSession] = []
+        self._cached_at = 0.0
 
     def load_record(self, path: Path) -> PeerSession | None:
         """Validate one ``<pid>.json`` and turn it into an addressable peer.
@@ -260,7 +274,10 @@ class PeerDirectory:
             metadata={"entrypoint": str(record.get("entrypoint", ""))[:64]},
         )
 
-    def peers(self) -> list[PeerSession]:
+    def peers(self, *, fresh: bool = False) -> list[PeerSession]:
+        now = time.monotonic()
+        if not fresh and self._cache and now - self._cached_at < self.CACHE_TTL_S:
+            return list(self._cache)
         found: dict[str, PeerSession] = {}
         for directory in registry_dirs(self._extra_roots):
             try:
@@ -271,7 +288,9 @@ class PeerDirectory:
                 peer = self.load_record(path)
                 if peer is not None:
                     found[peer.session_id] = peer
-        return list(found.values())
+        self._cache = list(found.values())
+        self._cached_at = time.monotonic()
+        return list(self._cache)
 
     def by_pid(self, pid: int) -> PeerSession | None:
         for peer in self.peers():
@@ -280,7 +299,11 @@ class PeerDirectory:
         return None
 
     def refresh(self, peer: PeerSession) -> PeerSession | None:
-        """Re-validate a peer immediately before use; sessions end all the time."""
+        """Re-validate a peer immediately before use; sessions end all the time.
+
+        This deliberately reads the record from disk rather than consulting the
+        cache: a message is about to be written to that session's socket.
+        """
         fresh = self.load_record(Path(peer.record_path))
         if fresh is None or fresh.session_id != peer.session_id:
             return None

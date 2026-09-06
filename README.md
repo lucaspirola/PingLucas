@@ -246,6 +246,22 @@ boundary and it deserves a real answer.
 
 See [SECURITY.md](SECURITY.md) for the threat model and reporting process.
 
+## The watch app
+
+There is a native watchOS app and iPhone companion under
+[`apps/`](apps/README.md), in Anthropic's colour language, built free on
+GitHub's macOS runners.
+
+Read [`apps/README.md`](apps/README.md) before you invest time in it. It
+compiles cleanly and will keep compiling, but there is **no free path from that
+artifact to a wrist**: nothing outside Darwin can compile watchOS, every
+sideloader either strips the watch bundle or refuses the install, and a free
+Apple ID can never hold the push entitlement. It is worth building if you have
+Mac access or pay the $99 — and it is worth keeping green either way, because
+it proves the client still compiles against the current SDK.
+
+For a wrist today, use Telegram.
+
 ## Requirements
 
 - Python 3.11+ — standard library only, at runtime and in the tests

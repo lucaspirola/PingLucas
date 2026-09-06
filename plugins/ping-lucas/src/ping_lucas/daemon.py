@@ -201,7 +201,10 @@ class Relay:
                 try:
                     self.route_reply(reply)
                 except Exception as exc:
+                    # Lucas answered and nothing happened. Say so, or he will
+                    # assume the agent got it and moved on.
                     self.log(f"could not route reply: {exc}")
+                    self._notify(f"Your reply could not be delivered: {exc}")
 
     # -- agent -> watch ----------------------------------------------------
 
