@@ -16,10 +16,11 @@ from . import __version__
 from .config import Config, config_path, state_home
 from .daemon import Relay
 from .errors import PingLucasError
-from .identity import proc_name, process_alive, proc_start
+from .identity import process_alive, proc_start
 from .ledger import Ledger
 from .outbox import Outbox
 from .registry import PeerDirectory, config_roots, registry_dirs, uds_address
+from .router import ReplyRouter
 from .safeio import ensure_private_dir, read_json, write_json
 from .transports import IncomingReply, build, available
 
@@ -46,6 +47,21 @@ def _running() -> dict | None:
     if not isinstance(pid, int) or not process_alive(pid, str(record.get("procStart", ""))):
         return None
     return record
+
+
+def _is_relay_process(pid: int) -> bool:
+    """True when ``pid``'s argv is still a PingLucas relay.
+
+    Combined with the pid/start-tick check `_running()` already performed, this
+    is what stops ``pinglucas stop`` from ever signalling a process that merely
+    inherited the recorded pid.
+    """
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as stream:
+            argv = stream.read(8192).split(b"\0")
+    except OSError:
+        return False
+    return b"ping_lucas" in argv and b"serve" in argv
 
 
 def _short(value: str, width: int = 60) -> str:
@@ -93,8 +109,10 @@ def cmd_init(args: argparse.Namespace) -> int:
             "topic": topic,
             "reply_topic": reply,
         }
-        _log(f"subscribe your phone to topic:  {topic}")
-        _log(f"send replies to topic:          {reply}")
+        server = args.ntfy_server or existing.get("server", "https://ntfy.sh")
+        _log(f"subscribe your phone to:  {server}/{topic}")
+        _log(f"send replies to:          {server}/{reply}")
+        _log("run `pinglucas qr` for a scannable code")
     elif transport == "webhook":
         if not args.webhook_url:
             raise PingLucasError("webhook transport needs --webhook-url")
@@ -177,9 +195,11 @@ def cmd_stop(args: argparse.Namespace) -> int:
         _log("not running")
         return 0
     pid = int(record["pid"])
-    # Only ever signal a process that is still our own relay generation.
-    if proc_name(pid) not in ("python3", "python", "python3.12", "ping-lucas", "pinglucas") and not proc_name(pid).startswith("python"):
-        _log(f"pid {pid} is no longer a PingLucas relay; refusing to signal it")
+    # `_running()` already proved this pid is alive with the recorded start
+    # tick. Confirm its argv too, so a signal can never land on a process that
+    # merely inherited the number.
+    if not _is_relay_process(pid):
+        _log(f"pid {pid} is not a PingLucas relay; refusing to signal it")
         return 1
     os.kill(pid, signal.SIGTERM)
     for _ in range(50):
@@ -268,6 +288,51 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def cmd_qr(args: argparse.Namespace) -> int:
+    """Print a QR code for whatever the phone needs to scan to subscribe."""
+    config = Config.load(Path(args.config) if args.config else None)
+    targets: list[tuple[str, str]] = []
+    if "ntfy" in config.transports:
+        settings = config.transport_settings("ntfy")
+        server = str(settings.get("server", "https://ntfy.sh")).rstrip("/")
+        if settings.get("topic"):
+            targets.append(("subscribe to pings", f"{server}/{settings['topic']}"))
+        if settings.get("reply_topic"):
+            targets.append(("publish replies", f"{server}/{settings['reply_topic']}"))
+    if "telegram" in config.transports:
+        token = str(config.transport_settings("telegram").get("token", ""))
+        if token:
+            try:
+                username = build("telegram", config.transport_settings("telegram"))._call("getMe").get("username")
+                if username:
+                    targets.append(("open the bot", f"https://t.me/{username}"))
+            except PingLucasError as exc:
+                print(f"could not reach Telegram: {exc}", file=sys.stderr)
+    if not targets:
+        raise PingLucasError("nothing to scan for the configured transports")
+    for label, url in targets:
+        print(f"\n{label}:  {url}")
+        print(_qr(url))
+    return 0
+
+
+def _qr(text: str) -> str:
+    """Render a QR code as text, or fall back to nothing if qrencode is absent."""
+    try:
+        result = subprocess.run(
+            ["qrencode", "-t", "UTF8", "-m", "1", text],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "  (install `qrencode` to render a scannable code here)"
+    if result.returncode != 0:
+        return "  (install `qrencode` to render a scannable code here)"
+    return result.stdout.rstrip("\n")
+
+
 def cmd_peers(args: argparse.Namespace) -> int:
     config = Config.load(Path(args.config) if args.config else None)
     peers = PeerDirectory(config.extra_claude_roots).peers()
@@ -283,17 +348,16 @@ def cmd_peers(args: argparse.Namespace) -> int:
 def cmd_send(args: argparse.Namespace) -> int:
     """Message an agent from the command line, without the relay running."""
     config = Config.load(Path(args.config) if args.config else None)
-    directory = PeerDirectory(config.extra_claude_roots)
     record = _running()
     if not record:
         raise PingLucasError("the relay is not running; start it so agents can reply to you")
+    directory = PeerDirectory(config.extra_claude_roots)
     outbox = Outbox(
         directory,
         self_address=uds_address(str(record["socket"])),
         self_name=config.name,
     )
-    relay_directory = PeerDirectory(config.extra_claude_roots)
-    peers = relay_directory.peers()
+    peers = directory.peers()
     selector = args.to.strip()
     matches = [p for p in peers if p.name.casefold() == selector.casefold()] or [
         p for p in peers if p.session_id.startswith(selector) and len(selector) >= 4
@@ -331,9 +395,23 @@ def cmd_reply(args: argparse.Namespace) -> int:
     record = _running()
     if not record:
         raise PingLucasError("the relay is not running")
-    relay = _AttachedRelay(config, record)
-    text = args.message if not args.tag else f"{args.tag} {args.message}"
-    relay.route_reply(IncomingReply(text=text, received_at=time.time()))
+    directory = PeerDirectory(config.extra_claude_roots)
+    router = ReplyRouter(
+        ledger=Ledger(config.ledger_path, ttl_s=config.ledger_ttl_s),
+        directory=directory,
+        outbox=Outbox(
+            directory,
+            self_address=uds_address(str(record["socket"])),
+            self_name=config.name,
+        ),
+        echo_tag=config.echo_tag,
+        mode_attestation=config.mode_attestation,
+        log=_log,
+    )
+    text = f"{args.tag} {args.message}" if args.tag else args.message
+    result = router.route(IncomingReply(text=text, received_at=time.time()))
+    if result.status != "delivered":
+        raise PingLucasError(result.detail or f"reply not delivered ({result.status})")
     return 0
 
 
@@ -368,36 +446,6 @@ WantedBy=default.target
     print("  systemctl --user enable --now ping-lucas.service")
     print("  loginctl enable-linger $USER   # keep it running when logged out")
     return 0
-
-
-class _AttachedRelay:
-    """A relay-shaped object that reuses a running relay's identity for one send.
-
-    Used by ``pinglucas reply`` so the terminal can answer a question without
-    a second process trying to claim the same socket.
-    """
-
-    def __init__(self, config: Config, record: dict):
-        self.config = config
-        self.ledger = Ledger(config.ledger_path, ttl_s=config.ledger_ttl_s)
-        self.directory = PeerDirectory(config.extra_claude_roots)
-        self.outbox = Outbox(
-            self.directory,
-            self_address=uds_address(str(record["socket"])),
-            self_name=config.name,
-        )
-
-    route_reply = Relay.route_reply
-    resolve_target = Relay.resolve_target
-    _outbound_hop_chain = staticmethod(lambda inherited: inherited)
-    _notify = staticmethod(lambda text: print(text))
-    log = staticmethod(_log)
-    replied = 0
-
-    class _Inbox:
-        hop_token = ""
-
-    inbox = _Inbox()
 
 
 def _age(stamp: float) -> str:
@@ -444,6 +492,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.set_defaults(func=cmd_doctor)
 
     sub.add_parser("peers", help="list live Claude sessions").set_defaults(func=cmd_peers)
+    sub.add_parser("qr", help="print a QR code for phone setup").set_defaults(func=cmd_qr)
 
     send = sub.add_parser("send", help="message an agent")
     send.add_argument("to")

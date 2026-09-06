@@ -179,6 +179,21 @@ In order of confidence, a reply is routed by:
 Text that merely *starts* with four letters is not mistaken for a tag: if the
 tag is unknown, the whole line is treated as prose and delivered intact.
 
+## Who can reach you
+
+Any Claude Code session running on the same machine, as the same Unix user.
+That includes sessions you did not start yourself.
+
+Subagents reach you *through their parent*: a subagent's cross-session message
+is sent under the parent session's address, so your answer is delivered into
+the parent conversation. The bundled skill tells subagents to escalate a
+question to their parent rather than ping you directly, precisely so the answer
+lands somewhere the asker can read it.
+
+Remote Control and cloud sessions cannot reach you — they are not on this
+machine's socket. If you want a session on another machine in your roster, run
+a relay there too.
+
 ## Talking first
 
 You do not have to wait to be asked.

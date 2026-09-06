@@ -95,6 +95,18 @@ either continue or stop with a clear statement of what is outstanding and why.
 If he never answers, say that plainly in your final report — do not quietly
 pick an option and present it as decided.
 
+## Who can reach him
+
+- **Any Claude session on this machine.** This is the normal case.
+- **Subagents, indirectly.** A subagent's cross-session message goes out under
+  its parent session's address, and Lucas's answer is delivered to the *parent*
+  conversation, not into the subagent. If you are a subagent that needs a
+  decision, report the question up to your parent rather than pinging directly
+  — otherwise the answer arrives somewhere you cannot see it.
+- **Not remote sessions.** Remote Control and cloud sessions are not on this
+  machine's Unix socket, so `lucas` will not appear in their roster. That is a
+  property of the transport, not a failure.
+
 ## Operating the relay
 
 The relay must be running for any of this to work. From a shell:

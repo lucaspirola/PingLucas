@@ -30,6 +30,7 @@ from .inbox import Inbox, InboundMessage, Refusal
 from .ledger import Ledger, split_tag
 from .outbox import Outbox
 from .registry import PeerDirectory, RecordPublisher, choose_socket_path
+from .router import ReplyRouter
 from .safeio import ensure_private_dir
 from .transports import IncomingReply, OutgoingPing, Transport, build
 
@@ -81,6 +82,15 @@ class Relay:
             self_name=config.name,
         )
         self.inbox.attach_outbox(self.outbox)
+        self.router = ReplyRouter(
+            ledger=self.ledger,
+            directory=self.directory,
+            outbox=self.outbox,
+            hop_token=self.inbox.hop_token,
+            echo_tag=config.echo_tag,
+            mode_attestation=config.mode_attestation,
+            log=self.log,
+        )
 
         self.publisher = RecordPublisher(
             session_id=self.session_id,
@@ -152,10 +162,16 @@ class Relay:
     # -- background loops --------------------------------------------------
 
     def _publish_loop(self) -> None:
-        """Re-publish so Claude sessions started after us can still see Lucas."""
+        """Re-publish so Claude sessions started after us can still see Lucas.
+
+        The record also carries an honest status: ``busy`` once questions are
+        stacking up unanswered, so an agent checking the roster can see he is
+        already backed up before adding a ninth thing to his wrist.
+        """
         last_heartbeat = time.monotonic()
         while not self._stop.wait(self.config.refresh_interval_s):
             try:
+                self.publisher.status = "busy" if self.ledger.pending() else "idle"
                 if time.monotonic() - last_heartbeat >= self.config.heartbeat_interval_s:
                     last_heartbeat = time.monotonic()
                 self.publisher.refresh()
@@ -239,49 +255,14 @@ class Relay:
 
     # -- watch -> agent ----------------------------------------------------
 
-    def resolve_target(self, reply: IncomingReply):
-        """Work out which waiting agent a wrist-typed reply belongs to."""
-        tag, body = split_tag(reply.text)
-        if tag:
-            entry = self.ledger.get(tag)
-            if entry is not None:
-                return entry, body
-            # An unknown tag is far more likely to be the first word of a real
-            # sentence than a typo'd address, so fall through with it intact.
-            body = reply.text.strip()
-        if reply.reply_to:
-            entry = self.ledger.by_external(reply.reply_to)
-            if entry is not None:
-                return entry, reply.text.strip()
-        return self.ledger.latest(), reply.text.strip()
-
     def route_reply(self, reply: IncomingReply) -> None:
-        entry, body = self.resolve_target(reply)
-        if entry is None:
-            self.log(f"no agent is waiting; ignoring: {reply.text[:60]}")
-            self._notify(f"Nobody is waiting on an answer right now, so I dropped: {reply.text[:80]}")
-            return
-        if not body:
-            self.log(f"empty reply for [{entry.tag}]; ignoring")
-            return
-
-        peer = self.directory.refresh(entry.to_peer())
-        if peer is None:
-            self.log(f"[{entry.tag}] {entry.label} is gone; cannot deliver")
-            self._notify(f"[{entry.tag}] {entry.label} has ended — your reply was not delivered.")
-            return
-
-        text = f"[{entry.tag}] {body}" if self.config.echo_tag else body
-        receipt = self.outbox.send_message(
-            peer,
-            text,
-            priority="now",
-            hop_chain=self._outbound_hop_chain(entry.hop_chain),
-            mode_attestation=self.config.mode_attestation,
-        )
-        self.ledger.mark_answered(entry.tag)
-        self.replied += 1
-        self.log(f"<- {peer.label} [{entry.tag}] {receipt['status']}: {body[:80]}")
+        result = self.router.route(reply)
+        if result.status == "delivered":
+            self.replied += 1
+        elif result.status == "no-target":
+            self._notify(f"Nobody is waiting on an answer, so I dropped: {reply.text[:80]}")
+        elif result.status == "target-gone" and result.entry is not None:
+            self._notify(f"[{result.entry.tag}] {result.detail} — your reply was not delivered.")
 
     def send_to(self, selector: str, message: str, *, priority: str = "now") -> dict[str, Any]:
         """Lucas-initiated message to an agent, addressed by name or id prefix."""
@@ -306,17 +287,6 @@ class Relay:
         if len(prefix) > 1:
             raise PingLucasError(f"{selector!r} matches {len(prefix)} sessions; use a longer id")
         raise PingLucasError(f"no live session matches {selector!r}")
-
-    def _outbound_hop_chain(self, inherited: str) -> str:
-        """Append our hop token when answering a peer turn; omit it otherwise.
-
-        Claude distinguishes a missing hop-chain (a fresh, human-driven turn)
-        from a present one (a message travelling a peer route).  A reply to an
-        agent's question is the latter, so the chain grows -- which is what
-        makes the loop guards work.
-        """
-        hops = inherited.split(",") if inherited else []
-        return ",".join((*hops, self.inbox.hop_token)[-32:])
 
     def _notify(self, text: str) -> None:
         for transport in self.transports:
