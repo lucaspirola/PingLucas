@@ -126,11 +126,18 @@ extension Color {
 
     /// A colour that resolves per appearance without a colour asset catalogue,
     /// so the palette stays readable in one file.
+    ///
+    /// watchOS has no light appearance and no `userInterfaceStyle`, so the
+    /// dynamic provider is unavailable there; the dark value is simply the
+    /// value. Every `Theme` token already short-circuits on watchOS, so this
+    /// branch exists for correctness rather than because it is reached.
     init(light: Color, dark: Color) {
-        #if canImport(UIKit)
+        #if canImport(UIKit) && !os(watchOS)
         self.init(uiColor: UIColor { traits in
             traits.userInterfaceStyle == .dark ? UIColor(dark) : UIColor(light)
         })
+        #elseif os(watchOS)
+        self = dark
         #else
         self = light
         #endif
