@@ -57,9 +57,13 @@ jobs:
           # embed step fails with "is a Foundation extension and must be embedded
           # in the parent app bundle's PlugIns directory".
           # https://github.com/yonaskolb/XcodeGen/issues/1613
+          # macOS ships BSD sed, whose -i REQUIRES a backup suffix. Plain
+          # `sed -i 's/../../'` reads the expression as the suffix and dies with
+          # "extra characters at the end of P command".
           if grep -q 'dstSubfolderSpec = 16' "${PROJECT}/project.pbxproj"; then
-            sed -i 's/dstSubfolderSpec = 16;/dstSubfolderSpec = 13;/g' "${PROJECT}/project.pbxproj"
-            sed -i 's|dstPath = "\$(CONTENTS_FOLDER_PATH)/Watch";|dstPath = "";|g' "${PROJECT}/project.pbxproj"
+            sed -i.bak 's/dstSubfolderSpec = 16;/dstSubfolderSpec = 13;/g' "${PROJECT}/project.pbxproj"
+            sed -i.bak 's|dstPath = "\$(CONTENTS_FOLDER_PATH)/Watch";|dstPath = "";|g' "${PROJECT}/project.pbxproj"
+            rm -f "${PROJECT}/project.pbxproj.bak"
           fi
 
       # The macos-26 image preinstalls watchOS 26.2 / 26.4 / 26.5 runtimes
