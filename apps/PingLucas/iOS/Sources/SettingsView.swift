@@ -14,7 +14,9 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Relay") {
+                // A string-titled Section has no footer overload; the header
+                // has to be spelled out once a footer is present.
+                Section {
                     TextField("Server", text: $server)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
@@ -24,6 +26,8 @@ struct SettingsView: View {
                     TextField("Reply topic", text: $replyTopic)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                } header: {
+                    Text("Relay")
                 } footer: {
                     Text("A topic name is a password: anyone who knows it can read your pings and answer as you. Keep it off screenshots.")
                 }
