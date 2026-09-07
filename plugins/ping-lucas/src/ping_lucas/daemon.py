@@ -120,6 +120,9 @@ class Relay:
     # -- lifecycle ---------------------------------------------------------
 
     def start(self) -> None:
+        orphans = self.publisher.sweep_orphans()
+        if orphans:
+            self.log(f"cleared {orphans} record(s) left by a relay that did not shut down cleanly")
         written = self.publisher.refresh()
         self.log(
             f"PingLucas {__version__} is live as '{self.config.name}' "

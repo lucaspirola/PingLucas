@@ -33,6 +33,7 @@ from .identity import (
     proc_name,
     proc_start,
     proc_uid,
+    process_alive,
 )
 from .safeio import (
     MAX_KEY_BYTES,
@@ -438,6 +439,39 @@ class RecordPublisher:
                 continue
             directories.append(directory)
         return directories
+
+    def sweep_orphans(self) -> int:
+        """Delete records a previous relay left behind when it was killed hard.
+
+        A clean shutdown withdraws its own artifacts, but ``kill -9`` cannot.
+        Claude ignores such a record -- the pid check fails -- so it is litter
+        rather than a hazard, except that Claude does not sweep the registry on
+        WSL, so the litter accumulates forever. Only records carrying our own
+        marker and a dead process are touched; another relay's live record, and
+        anything Claude wrote, are left strictly alone.
+        """
+        removed = 0
+        for directory in self._targets():
+            try:
+                records = sorted(directory.glob("[0-9]*.json"))[:MAX_RECORDS_PER_DIR]
+            except OSError:
+                continue
+            for path in records:
+                record = read_json(path, MAX_RECORD_BYTES)
+                marker = (record or {}).get("pingLucas")
+                if not isinstance(marker, dict):
+                    continue
+                pid = record.get("pid")
+                if not isinstance(pid, int) or pid == self.pid:
+                    continue
+                if process_alive(pid, str(record.get("procStart", ""))):
+                    continue
+                socket_value = record.get("messagingSocketPath")
+                if isinstance(socket_value, str) and os.path.isabs(socket_value):
+                    unlink_quietly(directory / key_filename(pid, socket_value))
+                unlink_quietly(path)
+                removed += 1
+        return removed
 
     def refresh(self) -> list[Path]:
         """Write (or rewrite) the record and key into every live registry."""
